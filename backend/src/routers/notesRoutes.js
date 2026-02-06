@@ -14,5 +14,7 @@ router.delete("/:id",checkToken, noteController.deleteNote);
 
 router.get("/search",checkToken,noteController.searchNote);
 
+router.post("/ask",checkToken,noteController.askBrain);
+
 export default router;
 

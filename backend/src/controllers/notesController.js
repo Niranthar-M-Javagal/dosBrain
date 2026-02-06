@@ -3,46 +3,56 @@ import chunker from "../utils/textChunker.js";
 import getVector from "../services/embeddingservice.js";
 import Embedding from "../models/embeddings.js";
 import cosineSimilarity from "../utils/vectorMath.js";
-const postNote = async (req,res)=>{
+import axios from "axios";
+
+const postNote = async (req, res) => {
     try {
-
-        //fetch user details from "user" created by authMiddleware 
         const userID = req.user.id;
+        const { title, content } = req.body;
 
-        //fetch content from request body and check if the title or content is empty 
-        const  {title,content} = req.body;
-        if(title.trim().length==0||content.trim().length==0)
-            return res.status(400).json({message: "Bad request, please fill all input fields"});
- 
-        const newNote = new Note({title,content,userID});
+        if (!title?.trim() || !content?.trim()) {
+            return res.status(400).json({ message: "Bad request, please fill all input fields" });
+        }
+
+        // 1. Save the main note first
+        const newNote = new Note({ title, content, userID });
         await newNote.save();
-        res.status(201).json({message:"Note created successfully"});
 
-            try {
-                const pieces = chunker(content,500,50);
+        // 2. AI Embedding Pipeline
+        try {
+            const pieces = chunker(content, 500, 50);
+            
+            for (let piece of pieces) {
+                // FORCE CLEANING: If piece is an array, take the first string
+                const cleanPiece = Array.isArray(piece) ? piece[0] : piece;
+                
+                if (!cleanPiece || typeof cleanPiece !== 'string') continue;
 
-                for(const piece of pieces){
+                const vector = await getVector(cleanPiece);
 
-                    const vector = await getVector(piece);
-
-                    await Embedding.create({
+                await Embedding.create({
                     noteId: newNote._id,
                     userID: userID,
-                    content: piece,
+                    content: cleanPiece, // Guaranteed string now
                     embedding: vector
                 });
-
-                console.log(`✅ AI: Successfully embedded note ${newNote._id}`);
-
-                }
-            } catch (error) {
-                console.error("❌ AI Error (Ollama might be down):", error.message);
             }
-    
+
+            console.log(`✅ AI: Successfully embedded note ${newNote._id}`);
+            // Send response ONLY after loop completes
+            return res.status(201).json({ message: "Note created and embedded successfully" });
+
+        } catch (aiError) {
+            console.error("❌ AI Error:", aiError.message);
+            // Still send a 201 because the note was saved, but warn about AI
+            return res.status(201).json({ message: "Note saved, but AI embedding failed" });
+        }
+
     } catch (error) {
-        res.status(500).json({message:"internal server error",error: error});
+        console.error("Global Error:", error);
+        return res.status(500).json({ message: "internal server error", error: error.message });
     }
-}
+};
 
 const getNote = async (req,res) => {
     try{
@@ -153,6 +163,96 @@ const searchNote = async (req, res) => {
     }
 };
 
-const noteCont = {postNote,getNote,editNote,deleteNote,searchNote};
+const askBrain = async (req, res) => {
+    try {
+        const { q } = req.query;
+        const userID = req.user.id;
+
+        if (!q) {
+            return res.status(400).json({ message: "Question is required" });
+        }
+
+        // 1. Convert user question into a vector using your existing service
+        const queryVector = await getVector(q);
+
+        // 2. Fetch all embeddings belonging to this user
+        const userEmbeddings = await Embedding.find({ userID });
+
+        // 3. Calculate similarity scores
+        const results = userEmbeddings.map(emb => ({
+            content: emb.content,
+            noteId: emb.noteId,
+            score: cosineSimilarity(queryVector, emb.embedding)
+        }));
+
+        // 4. Filter for quality (0.6 is a good balance) and sort by best match
+        const contextMatches = results
+            .filter(r => r.score > 0.6)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5); // Take top 5 chunks for context
+
+        if (contextMatches.length === 0) {
+            return res.status(200).json({ 
+                answer: "I checked your notes, but I don't have any information regarding that question.",
+                sources: [] 
+            });
+        }
+
+        // 5. Build the Context string for the LLM
+        const contextText = contextMatches.map(m => `- ${m.content}`).join("\n");
+
+        // 6. Send to Ollama (Llama 3.2)
+        const prompt = `
+            You are a helpful personal assistant. Below are snippets from the user's personal notes.
+            Use ONLY these notes to answer the question. If the answer isn't in the notes, say you don't know.
+            
+            Context:
+            ${contextText}
+
+            User Question: ${q}
+            Answer:
+        `;
+
+        const response = await axios.post("http://localhost:11434/api/generate", {
+            model: "llama3.2:latest",
+            prompt: prompt,
+            stream: false,
+            options: {
+                temperature: 0, // Keep it precise
+                num_predict: 300 // Prevent rambling
+            }
+        });
+
+        // 7. Resolve Source Titles
+        // Get unique Note IDs from the matches
+        const uniqueNoteIds = [...new Set(contextMatches.map(c => c.noteId.toString()))];
+        
+        // Look up the titles for those IDs
+        const sourceDetails = await Promise.all(
+            uniqueNoteIds.map(async (id) => {
+                const note = await Note.findById(id).select('title');
+                return { 
+                    id: id, 
+                    title: note ? note.title : "Unknown Note" 
+                };
+            })
+        );
+
+        // 8. Send the final package
+        res.status(200).json({
+            answer: response.data.response,
+            sources: sourceDetails
+        });
+
+    } catch (error) {
+        console.error("❌ Brain Error:", error.message);
+        res.status(500).json({ 
+            message: "The brain is having a headache.", 
+            error: error.message 
+        });
+    }
+};
+
+const noteCont = {postNote,getNote,editNote,deleteNote,searchNote,askBrain};
 
 export default noteCont;
