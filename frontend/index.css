@@ -1,0 +1,10 @@
+body {
+  margin: 0;
+  font-family: Inter, sans-serif;
+  background: #000;
+  color: white;
+}
+
+input, textarea {
+  outline: none;
+}

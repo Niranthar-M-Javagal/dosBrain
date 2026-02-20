@@ -47,7 +47,7 @@ router.post("/login", async (req,res) => {
 
         //checks if the email and password field is empty, if it is empty, returns a error with status 400
         if(!email || !password){
-            res.status(400).json({message : "Enter proper details"});
+            return res.status(400).json({message : "Enter proper details"});
         }
 
 
@@ -57,7 +57,7 @@ router.post("/login", async (req,res) => {
 
         //if the user is not present in the datavase returns a error with status 404 not found
         if(!findUser){
-            res.status(404).json({message:"User does not exist"});
+            return res.status(404).json({message:"User does not exist"});
         }
 
 
@@ -68,7 +68,7 @@ router.post("/login", async (req,res) => {
         //if the password is valid then, the user is logged in and the details are stored as a jsonwebtoken
         if(validate){
             const token = jwt.sign({id : findUser._id},ENV.jwt_secret,{expiresIn: "1D"});
-            res.status(200).json({
+            return res.status(200).json({
                 message:"Login Successful!",
                 token,
                 user: {name: findUser.name, email: findUser.email}
@@ -77,7 +77,7 @@ router.post("/login", async (req,res) => {
         
         
         else{
-            res.status(201).json({message:"Invalid password"});
+            return res.status(201).json({message:"Invalid password"});
         }
 
     } catch (error) {

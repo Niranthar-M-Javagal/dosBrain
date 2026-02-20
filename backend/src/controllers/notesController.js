@@ -38,7 +38,6 @@ const postNote = async (req, res) => {
                 });
             }
 
-            console.log(`✅ AI: Successfully embedded note ${newNote._id}`);
             // Send response ONLY after loop completes
             return res.status(201).json({ message: "Note created and embedded successfully" });
 
@@ -132,35 +131,43 @@ const deleteNote = async (req,res)=>{
 }
 
 const searchNote = async (req, res) => {
-    try {
-        const { q } = req.query;
-        // 1. Define it clearly here (Note the capital ID)
-        const userID = req.user.id; 
+  try {
+    const { q } = req.query;
+    const userID = req.user.id;
 
-        if (!q) return res.status(400).json({ message: "search query is required" });
-
-        const queryVector = await getVector(q);
-
-        // 2. Use the exact same variable name here
-        // The first 'userID' is the database key, the second is your variable
-        const userEmbeddings = await Embedding.find({ userID: userID });
-
-        const results = userEmbeddings.map(emb => {
-            const score = cosineSimilarity(queryVector, emb.embedding);
-            return {
-                content: emb.content,
-                noteId: emb.noteId, 
-                score
-            };
-        });
-
-        const topResults = results.sort((a, b) => b.score - a.score).slice(0, 7);
-        res.status(200).json(topResults);
-
-    } catch (error) {
-        // This is where your "userID is not defined" error was being caught
-        res.status(500).json({ message: "Internal server error", error: error.message });
+    if (!q) {
+      return res.status(400).json({ message: "Search query is required" });
     }
+
+    const queryVector = await getVector(q);
+
+    const userEmbeddings = await Embedding.find({ userId: userID });
+    console.log(userEmbeddings)
+
+    const results = userEmbeddings.map((emb) => {
+      const score = cosineSimilarity(queryVector, emb.embedding);
+
+      return {
+        _id: emb.noteId,
+        title: emb.title || "Matched Note",
+        content: emb.content,
+        score,
+      };
+    });
+
+    const topResults = results
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 7);
+
+    res.status(200).json(topResults);
+
+  } catch (error) {
+    console.error("Search Error:", error);
+    res.status(500).json({
+      message: "Internal server error",
+      error: error.message,
+    });
+  }
 };
 
 const askBrain = async (req, res) => {
@@ -187,7 +194,7 @@ const askBrain = async (req, res) => {
 
         // 4. Filter for quality (0.6 is a good balance) and sort by best match
         const contextMatches = results
-            .filter(r => r.score > 0.6)
+            .filter(r => r.score > 0.55)
             .sort((a, b) => b.score - a.score)
             .slice(0, 5); // Take top 5 chunks for context
 
@@ -253,6 +260,25 @@ const askBrain = async (req, res) => {
     }
 };
 
-const noteCont = {postNote,getNote,editNote,deleteNote,searchNote,askBrain};
+const getNoteById = async (req, res) => {
+    try {
+        const noteId = req.params.id;
+        const userID = req.user.id;
+
+        // Find a note that matches the ID AND belongs to the user
+        const note = await Note.findOne({ _id: noteId, userID: userID });
+
+        if (!note) {
+            return res.status(404).json({ message: "Note not found" });
+        }
+
+        res.status(200).json(note);
+    } catch (error) {
+        console.error("Error fetching single note:", error);
+        res.status(500).json({ message: "Internal server error", error: error.message });
+    }
+};
+
+const noteCont = {postNote,getNote,editNote,deleteNote,searchNote,askBrain,getNoteById};
 
 export default noteCont;
